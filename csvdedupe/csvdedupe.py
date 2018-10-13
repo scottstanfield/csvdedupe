@@ -6,11 +6,15 @@ import sys
 import locale
 import logging
 from io import StringIO, open
-from . import csvhelpers
+#from . import csvhelpers
+import csvhelpers
 import dedupe
 
 import itertools
+import stopwatch
 
+timer = stopwatch.Timer()
+timer.start()
 
 class CSVDedupe(csvhelpers.CSVCommand) :
     def __init__(self):
@@ -25,7 +29,7 @@ class CSVDedupe(csvhelpers.CSVCommand) :
                     # We need to get control of STDIN again.
                     # This is a UNIX/Mac OSX solution only
                     # http://stackoverflow.com/questions/7141331/pipe-input-to-python-program-and-later-get-input-from-user
-                    # 
+                    #
                     # Same question has a Windows solution
                     sys.stdin = open('/dev/tty')  # Unix only solution,
                 else:
@@ -48,8 +52,8 @@ class CSVDedupe(csvhelpers.CSVCommand) :
             except KeyError:
                 raise self.parser.error("You must provide field_names")
         else :
-            self.field_names = [self.field_def['field'] 
-                                for field_def in self.field_definition]
+            self.field_names = [self.field_def['field']
+                                for field_def in self.field_definitions]
 
         self.destructive = self.configuration.get('destructive', False)
 
@@ -66,7 +70,9 @@ class CSVDedupe(csvhelpers.CSVCommand) :
         data_d = {}
         # import the specified CSV file
 
-        data_d = csvhelpers.readData(self.input, self.field_names, delimiter=self.delimiter)
+        timer.elapsed('Starting file read: ')
+        data_d = csvhelpers.readData(self.input, self.field_names)
+        timer.elapsed('Finished file read: ')
 
         logging.info('imported %d rows', len(data_d))
 
@@ -94,7 +100,7 @@ class CSVDedupe(csvhelpers.CSVCommand) :
 
             fields = {variable.field for variable in deduper.data_model.primary_fields}
             unique_d, parents = exact_matches(data_d, fields)
-                
+
         else:
             # # Create a new deduper object and pass our data model to it.
             deduper = dedupe.Dedupe(self.field_definition)
@@ -115,7 +121,7 @@ class CSVDedupe(csvhelpers.CSVCommand) :
 
         # ## Clustering
 
-        # Find the threshold that will maximize a weighted average of our precision and recall. 
+        # Find the threshold that will maximize a weighted average of our precision and recall.
         # When we set the recall weight to 2, we are saying we care twice as much
         # about recall as we do precision.
         #

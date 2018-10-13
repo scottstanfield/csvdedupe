@@ -18,13 +18,13 @@ class CSVLink(csvhelpers.CSVCommand):
 
         if len(self.configuration['input']) == 2:
             try:
-                self.input_1 = open(self.configuration['input'][0], encoding='utf-8').read()
+                self.input_1 = open(self.configuration['input'][0], 'rU').read()
             except IOError:
                 raise self.parser.error("Could not find the file %s" %
                                    (self.configuration['input'][0], ))
 
             try:
-                self.input_2 = open(self.configuration['input'][1], encoding='utf-8').read()
+                self.input_2 = open(self.configuration['input'][1], 'rU').read()
             except IOError:
                 raise self.parser.error("Could not find the file %s" %
                                    (self.configuration['input'][1], ))
@@ -71,11 +71,9 @@ class CSVLink(csvhelpers.CSVCommand):
         # import the specified CSV file
 
         data_1 = csvhelpers.readData(self.input_1, self.field_names_1,
-                                    delimiter=self.delimiter,
-                                    prefix='input_1')
+                                     prefix='input_1')
         data_2 = csvhelpers.readData(self.input_2, self.field_names_2,
-                                    delimiter=self.delimiter,
-                                    prefix='input_2')
+                                     prefix='input_2')
 
         # sanity check for provided field names in CSV file
         for field in self.field_names_1:
@@ -169,11 +167,11 @@ class CSVLink(csvhelpers.CSVCommand):
 
         if self.output_file:
             if sys.version < '3' :
-                with open(self.output_file, 'wb', encoding='utf-8') as output_file:
+                with open(self.output_file, 'wb') as output_file:
                     write_function(clustered_dupes, self.input_1, self.input_2,
                                    output_file, self.inner_join)
             else :
-                with open(self.output_file, 'w', encoding='utf-8') as output_file:
+                with open(self.output_file, 'w') as output_file:
                     write_function(clustered_dupes, self.input_1, self.input_2,
                                    output_file, self.inner_join)
         else:

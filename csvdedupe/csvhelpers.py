@@ -7,15 +7,17 @@ import collections
 import logging
 from io import StringIO, open
 import sys
-import platform
+from signal import signal, SIGPIPE, SIG_DFL
+signal(SIGPIPE, SIG_DFL)
 if sys.version < '3' :
     from backports import csv
 else :
     import csv
 
-if platform.system() != 'Windows' :
-    from signal import signal, SIGPIPE, SIG_DFL
-    signal(SIGPIPE, SIG_DFL)
+
+import stopwatch
+timer = stopwatch.Timer()
+timer.start()
 
 import dedupe
 import json
@@ -23,21 +25,23 @@ import argparse
 
 def preProcess(column):
     """
-    Do a little bit of data cleaning. Things like casing, extra spaces, 
+    Do a little bit of data cleaning. Things like casing, extra spaces,
     quotes and new lines are ignored.
     """
-    column = re.sub('  +', ' ', column)
-    column = re.sub('\n', ' ', column)
+    # TODO: I think it's safe to skip these next two lines b/c my pre-processing in R handles it
+    # column = re.sub('  +', ' ', column)
+    # column = re.sub('\n', ' ', column)
     column = column.strip().strip('"').strip("'").lower().strip()
-    if column == '' :
+    if column == '':
         column = None
+
     return column
 
 
-def readData(input_file, field_names, delimiter=',', prefix=None):
+def readData(input_file, field_names, prefix=None):
     """
-    Read in our data from a CSV file and create a dictionary of records, 
-    where the key is a unique record ID and each value is a dict 
+    Read in our data from a CSV file and create a dictionary of records,
+    where the key is a unique record ID and each value is a dict
     of the row fields.
 
     **Currently, dedupe depends upon records' unique ids being integers
@@ -46,8 +50,10 @@ def readData(input_file, field_names, delimiter=',', prefix=None):
     """
 
     data = {}
-    
-    reader = csv.DictReader(StringIO(input_file),delimiter=delimiter)
+
+    reader = csv.DictReader(StringIO(input_file))
+    timer.elapsed(f'Opened file')
+
     for i, row in enumerate(reader):
         clean_row = {k: preProcess(v) for (k, v) in row.items() if k is not None}
         if prefix:
@@ -55,6 +61,8 @@ def readData(input_file, field_names, delimiter=',', prefix=None):
         else:
             row_id = i
         data[row_id] = clean_row
+        if i % 100000 == 0:
+            timer.elapsed(str(i))
 
     return data
 
@@ -62,15 +70,20 @@ def readData(input_file, field_names, delimiter=',', prefix=None):
 # ## Writing results
 def writeResults(clustered_dupes, input_file, output_file):
 
-    # Write our original data back out to a CSV with a new column called 
-    # 'Cluster ID' which indicates which records refer to each other.
+    # Write our original data back out to a CSV with a new column called
+    # 'ClusterID' which indicates which records refer to each other.
 
     logging.info('saving results to: %s' % output_file)
 
     cluster_membership = {}
+    # TODO: rework with zip
+    # for record_id, score in zip(cluster, score):
     for cluster_id, (cluster, score) in enumerate(clustered_dupes):
-        for record_id in cluster:
-            cluster_membership[record_id] = cluster_id
+        for record_index, record_id in enumerate(cluster):
+            cluster_membership[record_id] = {
+                'cluster_id': cluster_id,
+                'score': score[record_index],
+            }
 
     unique_record_id = cluster_id + 1
 
@@ -79,24 +92,29 @@ def writeResults(clustered_dupes, input_file, output_file):
     reader = csv.reader(StringIO(input_file))
 
     heading_row = next(reader)
-    heading_row.insert(0, u'Cluster ID')
+    heading_row.insert(0, u'ClusterID')
+    heading_row.insert(1, u'Confidence')
     writer.writerow(heading_row)
 
     for row_id, row in enumerate(reader):
         if row_id in cluster_membership:
-            cluster_id = cluster_membership[row_id]
+            cluster_id = cluster_membership[row_id]['cluster_id']
+            score = cluster_membership[row_id]['score']
+            score = format(float(score), '.3f')
         else:
             cluster_id = unique_record_id
             unique_record_id += 1
+            score = ''
         row.insert(0, cluster_id)
+        row.insert(1, score)
         writer.writerow(row)
 
 
 # ## Writing results
 def writeUniqueResults(clustered_dupes, input_file, output_file):
 
-    # Write our original data back out to a CSV with a new column called 
-    # 'Cluster ID' which indicates which records refer to each other.
+    # Write our original data back out to a CSV with a new column called
+    # 'ClusterID' which indicates which records refer to each other.
 
     logging.info('saving unique results to: %s' % output_file)
 
@@ -112,7 +130,7 @@ def writeUniqueResults(clustered_dupes, input_file, output_file):
     reader = csv.reader(StringIO(input_file))
 
     heading_row = next(reader)
-    heading_row.insert(0, u'Cluster ID')
+    heading_row.insert(0, u'ClusterID')
     writer.writerow(heading_row)
 
     seen_clusters = set()
@@ -207,20 +225,11 @@ class CSVCommand(object) :
         self.sample_size = self.configuration.get('sample_size', 1500)
         self.recall_weight = self.configuration.get('recall_weight', 1)
 
-        self.delimiter = self.configuration.get('delimiter',',')
-
-        # backports for python version below 3 uses unicode delimiters
-        if sys.version < '3':
-            self.delimiter = unicode(self.delimiter)
-
         if 'field_definition' in self.configuration:
             self.field_definition = self.configuration['field_definition']
         else :
             self.field_definition = None
 
-        if self.skip_training and not os.path.exists(self.training_file):
-            raise self.parser.error(
-                "You need to provide an existing training_file or run this script without --skip_training")
 
     def _common_args(self) :
         # optional arguments
@@ -232,16 +241,14 @@ class CSVCommand(object) :
             help='CSV file to store deduplication results')
         self.parser.add_argument('--skip_training', action='store_true',
             help='Skip labeling examples by user and read training from training_files only')
-        self.parser.add_argument('--training_file', type=str, 
+        self.parser.add_argument('--training_file', type=str,
             help='Path to a new or existing file consisting of labeled training examples')
         self.parser.add_argument('--settings_file', type=str,
             help='Path to a new or existing file consisting of learned training settings')
-        self.parser.add_argument('--sample_size', type=int, 
+        self.parser.add_argument('--sample_size', type=int,
             help='Number of random sample pairs to train off of')
-        self.parser.add_argument('--recall_weight', type=int, 
+        self.parser.add_argument('--recall_weight', type=int,
             help='Threshold that will maximize a weighted average of our precision and recall')
-        self.parser.add_argument('-d', '--delimiter', type=str,
-            help='Delimiting character of the input CSV file', default=',')
         self.parser.add_argument('-v', '--verbose', action='count', default=0)
 
 
@@ -255,6 +262,9 @@ class CSVCommand(object) :
                          self.training_file)
             with open(self.training_file) as tf:
                 deduper.readTraining(tf)
+        elif self.skip_training:
+            raise self.parser.error(
+                "You need to provide an existing training_file or run this script without --skip_training")
 
         if not self.skip_training:
             logging.info('starting active labeling...')
